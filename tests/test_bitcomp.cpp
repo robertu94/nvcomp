@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2019-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -37,9 +37,7 @@
 #include <stdlib.h>
 #include <vector>
 
-// Test GPU decompression with bitcomp API //
-
-#ifdef ENABLE_BITCOMP
+// Test GPU decompression with Bitcomp compression API //
 
 using namespace std;
 using namespace nvcomp;
@@ -71,7 +69,7 @@ std::vector<T> buildRuns(const size_t numRuns, const size_t runSize)
 }
 
 template <typename T>
-void test_bitcomp(const std::vector<T>& input)
+void test_bitcomp(const std::vector<T>& input, nvcompType_t data_type)
 {
   // create GPU only input buffer
   T* d_in_data;
@@ -83,76 +81,45 @@ void test_bitcomp(const std::vector<T>& input)
   cudaStream_t stream;
   cudaStreamCreate(&stream);
 
-  void* d_comp_out;
-  void* const d_comp_temp = nullptr;
-
-  // Get compressor temp size. Bitcomp should not use any.
-  BitcompCompressor compressor(nvcomp::TypeOf<T>());
-
-  size_t comp_temp_bytes;
-  size_t comp_out_bytes;
-  compressor.configure(in_bytes, &comp_temp_bytes, &comp_out_bytes);
-  REQUIRE(comp_temp_bytes == 0);
-  REQUIRE(comp_out_bytes > input.size() * sizeof(T));
+  BitcompManager manager{data_type, 0, stream};
+  auto comp_config = manager.configure_compression(in_bytes);
 
   // Allocate output buffer
-  CUDA_CHECK(cudaMalloc(&d_comp_out, comp_out_bytes));
-  size_t* comp_out_bytes_ptr;
-  CUDA_CHECK(
-      cudaMalloc((void**)&comp_out_bytes_ptr, sizeof(*comp_out_bytes_ptr)));
+  uint8_t* d_comp_out;
+  CUDA_CHECK(cudaMalloc(&d_comp_out, comp_config.max_compressed_buffer_size));
 
-  compressor.compress_async(
-      d_in_data,
-      in_bytes,
-      d_comp_temp,
-      comp_temp_bytes,
+  manager.compress(
+      reinterpret_cast<const uint8_t*>(d_in_data),
       d_comp_out,
-      comp_out_bytes_ptr,
-      stream);
+      comp_config);
 
   CUDA_CHECK(cudaStreamSynchronize(stream));
-  CUDA_CHECK(cudaMemcpy(
-      &comp_out_bytes,
-      comp_out_bytes_ptr,
-      sizeof(comp_out_bytes),
-      cudaMemcpyDeviceToHost));
+
+  size_t comp_out_bytes = manager.get_compressed_output_size(d_comp_out);
 
   cudaFree(d_in_data);
 
-  T* out_ptr;
-
   // Test to make sure copying the compressed file is ok
-  void* copied = 0;
+  uint8_t* copied = 0;
   CUDA_CHECK(cudaMalloc(&copied, comp_out_bytes));
-  CUDA_CHECK(cudaMemcpy(copied, d_comp_out, comp_out_bytes, cudaMemcpyDeviceToDevice));
+  CUDA_CHECK(
+      cudaMemcpy(copied, d_comp_out, comp_out_bytes, cudaMemcpyDeviceToDevice));
   cudaFree(d_comp_out);
   d_comp_out = copied;
 
-  BitcompDecompressor decompressor;
+  auto decomp_config = manager.configure_decompression(d_comp_out);
 
-  size_t decomp_temp_bytes;
-  size_t decomp_out_bytes;
-  decompressor.configure(
+  T* out_ptr;
+  cudaMalloc(&out_ptr, decomp_config.decomp_data_size);
+
+  // make sure the data won't match input if not written to, so we can verify
+  // correctness
+  cudaMemset(out_ptr, 0, decomp_config.decomp_data_size);
+
+  manager.decompress(
+      reinterpret_cast<uint8_t*>(out_ptr),
       d_comp_out,
-      comp_out_bytes,
-      &decomp_temp_bytes,
-      &decomp_out_bytes,
-      stream);
-
-  REQUIRE(decomp_temp_bytes == 0);
-  void* const d_decomp_temp = nullptr;
-
-  CUDA_CHECK(cudaMalloc(&out_ptr, decomp_out_bytes));
-
-  decompressor.decompress_async(
-      d_comp_out,
-      comp_out_bytes,
-      d_decomp_temp,
-      decomp_temp_bytes,
-      out_ptr,
-      decomp_out_bytes,
-      stream);
-
+      decomp_config);
   CUDA_CHECK(cudaStreamSynchronize(stream));
 
   // Copy result back to host
@@ -173,16 +140,16 @@ void test_bitcomp(const std::vector<T>& input)
  * UNIT TESTS *****************************************************************
  *****************************************************************************/
 
-TEST_CASE("comp/decomp bitcomp-small", "[nvcomp]")
+TEST_CASE("comp/decomp Bitcomp-small", "[nvcomp]")
 {
   using T = int;
 
   std::vector<T> input = {0, 2, 2, 3, 0, 0, 0, 0, 0, 3, 1, 1, 1, 1, 1, 2, 3, 3};
 
-  test_bitcomp(input);
+  test_bitcomp(input, NVCOMP_TYPE_INT);
 }
 
-TEST_CASE("comp/decomp bitcomp-1", "[nvcomp]")
+TEST_CASE("comp/decomp Bitcomp-1", "[nvcomp]")
 {
   using T = int;
 
@@ -192,67 +159,66 @@ TEST_CASE("comp/decomp bitcomp-1", "[nvcomp]")
     input.push_back(i >> 2);
   }
 
-  test_bitcomp(input);
+  test_bitcomp(input, NVCOMP_TYPE_INT);
 }
 
-TEST_CASE("comp/decomp bitcomp-all-small-sizes", "[nvcomp][small]")
+TEST_CASE("comp/decomp Bitcomp-all-small-sizes", "[nvcomp][small]")
 {
   using T = uint8_t;
 
   for (int total = 1; total < 4096; ++total) {
     std::vector<T> input = buildRuns<T>(total, 1);
-    test_bitcomp(input);
+    test_bitcomp(input, NVCOMP_TYPE_UCHAR);
   }
 }
 
-TEST_CASE("comp/decomp bitcomp-multichunk", "[nvcomp][large]")
+TEST_CASE("comp/decomp Bitcomp-multichunk", "[nvcomp][large]")
 {
   using T = int;
 
   for (int total = 10; total < (1 << 24); total = total * 2 + 7) {
     std::vector<T> input = buildRuns<T>(total, 10);
-    test_bitcomp(input);
+    test_bitcomp(input, NVCOMP_TYPE_INT);
   }
 }
 
-TEST_CASE("comp/decomp bitcomp-small-uint8", "[nvcomp][small]")
+TEST_CASE("comp/decomp Bitcomp-small-uint8", "[nvcomp][small]")
 {
   using T = uint8_t;
 
   for (size_t num = 1; num < 1 << 18; num = num * 2 + 1) {
     std::vector<T> input = buildRuns<T>(num, 3);
-    test_bitcomp(input);
+    test_bitcomp(input, NVCOMP_TYPE_UCHAR);
   }
 }
 
-TEST_CASE("comp/decomp bitcomp-small-uint16", "[nvcomp][small]")
+TEST_CASE("comp/decomp Bitcomp-small-uint16", "[nvcomp][small]")
 {
   using T = uint16_t;
 
   for (size_t num = 1; num < 1 << 18; num = num * 2 + 1) {
     std::vector<T> input = buildRuns<T>(num, 3);
-    test_bitcomp(input);
+    test_bitcomp(input, NVCOMP_TYPE_USHORT);
   }
 }
 
-TEST_CASE("comp/decomp bitcomp-small-uint32", "[nvcomp][small]")
+TEST_CASE("comp/decomp Bitcomp-small-uint32", "[nvcomp][small]")
 {
   using T = uint32_t;
 
   for (size_t num = 1; num < 1 << 18; num = num * 2 + 1) {
     std::vector<T> input = buildRuns<T>(num, 3);
-    test_bitcomp(input);
+    test_bitcomp(input, NVCOMP_TYPE_UINT);
   }
 }
 
-TEST_CASE("comp/decomp bitcomp-small-uint64", "[nvcomp][small]")
+TEST_CASE("comp/decomp Bitcomp-small-uint64", "[nvcomp][small]")
 {
   using T = uint64_t;
 
   for (size_t num = 1; num < 1 << 18; num = num * 2 + 1) {
     std::vector<T> input = buildRuns<T>(num, 3);
-    test_bitcomp(input);
+    // NVCOMP_TYPE_ULONGLONG currently unsupported
+    test_bitcomp(input, NVCOMP_TYPE_UINT);
   }
 }
-
-#endif // ENABLE_BITCOMP

@@ -11,6 +11,8 @@ set(CMAKE_CUDA_STANDARD 14)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+include(GNUInstallDirs)
+
 list( APPEND CMAKE_MODULE_PATH
   ${CMAKE_SOURCE_DIR}/cmake
 )
@@ -68,7 +70,8 @@ if(DEFINED DEVEL AND NOT DEVEL EQUAL 0)
 endif()
 
   if (MSVC)
-    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/W3>")
+    # Use "/permissive-" in order to be closer to GCC/Clang in what the MSVC compiler accepts.
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/W3>" "$<$<COMPILE_LANGUAGE:CXX>:/permissive->")
   endif()
 
 if(NOT DEFINED CUB_DIR AND DEFINED ENV{CUB_DIR})
@@ -94,6 +97,7 @@ endif()
 
 if( DEFINED NVCOMP_EXTS_ROOT )
   unset( NVCOMP_FIND_QUIET )
+  set( ENV{ans_ROOT} ${NVCOMP_EXTS_ROOT} )
   set( ENV{gdeflate_ROOT} ${NVCOMP_EXTS_ROOT} )
   set( ENV{bitcomp_ROOT} ${NVCOMP_EXTS_ROOT} )
 endif()
@@ -111,6 +115,12 @@ if (gdeflate_FOUND)
 
   # Find ZLIB for CPU compression
   find_package(ZLIB)
+endif()
+
+find_package(ans ${NVCOMP_FIND_QUIET})
+if (ans_FOUND)
+  message (STATUS "Found ans")
+  add_definitions(-DENABLE_ANS)
 endif()
 
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)

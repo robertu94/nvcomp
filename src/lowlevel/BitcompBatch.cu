@@ -121,7 +121,9 @@ nvcompStatus_t nvcompBatchedBitcompCompressAsync(
 // Need to convert them to nvcompStatus_t.
 __global__ void convertOutputStatuses (nvcompStatus_t *statuses, size_t batch_size)
 {
-  static_assert (sizeof (nvcompStatus_t) == sizeof (bitcompResult_t));
+  static_assert(
+      sizeof(nvcompStatus_t) == sizeof(bitcompResult_t),
+      "bitcomp and nvcomp statuses must be the same size");
   size_t index = (size_t)blockIdx.x * (size_t)blockDim.x + (size_t)threadIdx.x;
   if (index >= batch_size)
       return;
@@ -218,6 +220,61 @@ nvcompStatus_t nvcompBatchedBitcompDecompressGetTempSize(
 {
   *temp_bytes = 0;
   return nvcompSuccess;
+}
+
+#else
+
+nvcompStatus_t nvcompBatchedBitcompCompressGetMaxOutputChunkSize(
+    size_t, nvcompBatchedBitcompFormatOpts, size_t*)
+{
+  return nvcompErrorNotSupported;
+}
+
+nvcompStatus_t nvcompBatchedBitcompCompressAsync(
+    const void* const*,
+    const size_t*,
+    size_t,
+    size_t,
+    void*,
+    size_t,
+    void* const*,
+    size_t*,
+    const nvcompBatchedBitcompFormatOpts,
+    cudaStream_t)
+{
+  return nvcompErrorNotSupported;
+}
+
+nvcompStatus_t nvcompBatchedBitcompDecompressAsync(
+    const void* const*,
+    const size_t*,
+    const size_t*,
+    size_t*,
+    size_t,
+    void* const,
+    size_t,
+    void* const*,
+    nvcompStatus_t*,
+    cudaStream_t)
+{
+  return nvcompErrorNotSupported;
+}
+
+nvcompStatus_t nvcompBatchedBitcompGetDecompressSizeAsync(
+    const void* const*, const size_t*, size_t*, size_t, cudaStream_t)
+{
+  return nvcompErrorNotSupported;
+}
+
+nvcompStatus_t nvcompBatchedBitcompCompressGetTempSize(
+    size_t, size_t, nvcompBatchedBitcompFormatOpts, size_t*)
+{
+  return nvcompErrorNotSupported;
+}
+
+nvcompStatus_t nvcompBatchedBitcompDecompressGetTempSize(size_t, size_t, size_t*)
+{
+  return nvcompErrorNotSupported;
 }
 
 #endif

@@ -64,6 +64,77 @@ namespace nvcomp
 #pragma GCC diagnostic ignored "-Wunused-function"
 #endif
 
+// returns nano-seconds
+inline uint64_t get_time(timespec start, timespec end)
+{
+  constexpr const uint64_t BILLION = 1000000000ULL;
+  const uint64_t elapsed_time
+      = BILLION * (end.tv_sec - start.tv_sec) + end.tv_nsec - start.tv_nsec;
+  return elapsed_time;
+}
+
+// size in bytes, returns GB/s
+inline double gibs(struct timespec start, struct timespec end, size_t s)
+{
+  uint64_t t = get_time(start, end);
+  return (double)s / t * 1e9 / 1024 / 1024 / 1024;
+}
+
+// size in bytes, returns GB/s
+inline double
+gbs(const std::chrono::time_point<std::chrono::steady_clock>& start,
+    const std::chrono::time_point<std::chrono::steady_clock>& end,
+    size_t s)
+{  
+  return (double)s / std::chrono::nanoseconds(end - start).count();
+}
+
+inline double
+gbs(const std::chrono::nanoseconds duration,
+    size_t s)
+{
+  return (double)s / duration.count();
+}
+
+inline double
+average_gbs(
+    const std::vector<std::chrono::nanoseconds>& durations,
+    size_t s)
+{
+  size_t count_sum = 0;
+  for (auto duration : durations) {
+    count_sum += duration.count();
+  }
+
+  size_t avg_duration = count_sum / durations.size();
+
+  return (double)s / avg_duration;
+}
+
+inline double
+average_gbs(
+    const std::vector<float>& durations,
+    size_t s)
+{
+  double duration_sum = 0;
+  for (auto duration : durations) {
+    duration_sum += duration;
+  }
+
+  double avg_duration = (duration_sum / durations.size()) / 1e3;
+
+  return (double)s / 1e9 / avg_duration;
+}
+
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
+
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#endif
+
 template <>
 inline nvcompType_t TypeOf<float>()
 {
@@ -107,12 +178,9 @@ gen_data(const int max_byte, const size_t size, std::mt19937& rng)
 
 // Load dataset from binary file into an array of type T
 template <typename T>
-std::vector<T> load_dataset_from_binary(char* fname, size_t* input_elts)
+std::vector<T> load_dataset_from_binary(char* fname, size_t* input_element_count)
 {
-
-  FILE* fileptr;
-
-  fileptr = fopen(fname, "rb");
+  FILE* fileptr = fopen(fname, "rb");
 
   if (fileptr == NULL) {
     printf("Binary input file not found.\n");
@@ -124,12 +192,12 @@ std::vector<T> load_dataset_from_binary(char* fname, size_t* input_elts)
   size_t filelen = ftell(fileptr);
   rewind(fileptr);
 
-  // If input_elts is already set, use it, otherwise load the whole file
-  if (*input_elts == 0 || filelen / sizeof(T) < *input_elts) {
-    *input_elts = filelen / sizeof(T);
+  // If input_element_count is already set, use it, otherwise load the whole file
+  if (*input_element_count == 0 || filelen / sizeof(T) < *input_element_count) {
+    *input_element_count = filelen / sizeof(T);
   }
 
-  const size_t numElements = *input_elts;
+  const size_t numElements = *input_element_count;
 
   std::vector<T> buffer(numElements);
 
@@ -139,7 +207,7 @@ std::vector<T> load_dataset_from_binary(char* fname, size_t* input_elts)
     throw std::runtime_error(
         "Failed to read file: " + std::string(fname) + " read "
         + std::to_string(numRead) + "/"
-        + std::to_string(*input_elts * sizeof(T)) + " elements.");
+        + std::to_string(*input_element_count * sizeof(T)) + " elements.");
   }
 
   fclose(fileptr);
@@ -148,7 +216,7 @@ std::vector<T> load_dataset_from_binary(char* fname, size_t* input_elts)
 
 // Load dataset from binary file into an array of type T
 template <typename T>
-std::vector<T> load_dataset_from_txt(char* fname, size_t* input_elts)
+std::vector<T> load_dataset_from_txt(char* fname, size_t* input_element_count)
 {
 
   std::vector<T> buffer;
@@ -164,7 +232,7 @@ std::vector<T> load_dataset_from_txt(char* fname, size_t* input_elts)
   size_t i = 0;
   constexpr size_t MAX_LINE_LEN = 100;
   char line[MAX_LINE_LEN];
-  while (fgets(line, MAX_LINE_LEN, fileptr) && i < *input_elts) {
+  while (fgets(line, MAX_LINE_LEN, fileptr) && i < *input_element_count) {
     //    std::stringstream row(line);
     buffer.push_back((T)std::stof(line));
     i++;
@@ -173,50 +241,6 @@ std::vector<T> load_dataset_from_txt(char* fname, size_t* input_elts)
   fclose(fileptr);
 
   return buffer;
-}
-
-// Compress a single chunk
-template <typename T>
-static void compress_chunk(
-    const void* const d_in_data,
-    const size_t chunk_size,
-    const nvcompType_t type,
-    const nvcompCascadedFormatOpts* const comp_opts,
-    void* const d_comp_temp,
-    size_t comp_temp_bytes,
-    void* const d_comp_out,
-    size_t* const comp_out_bytes,
-    cudaStream_t stream)
-{
-  size_t metadata_bytes;
-
-  nvcompStatus_t status = nvcompCascadedCompressConfigure(
-      comp_opts,
-      type,
-      chunk_size,
-      &metadata_bytes,
-      &comp_temp_bytes,
-      comp_out_bytes);
-
-  benchmark_assert(
-      status == nvcompSuccess,
-      "nvcompCascadedCompressGetMetadata not successful, chunk");
-
-  status = nvcompCascadedCompressAsync(
-      comp_opts,
-      type,
-      d_in_data,
-      chunk_size,
-      d_comp_temp,
-      comp_temp_bytes,
-      d_comp_out,
-      comp_out_bytes,
-      stream);
-
-  benchmark_assert(
-      status == nvcompSuccess,
-      "nvcompCascadedCompressAsync not successfully launched");
-  CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
 } // namespace nvcomp

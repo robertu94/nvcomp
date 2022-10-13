@@ -31,20 +31,21 @@ else()
   endif()
 endif()
 
-include_directories("./")
-
 set_property(TARGET nvcomp PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET nvcomp PROPERTY CUDA_ARCHITECTURES ${GPU_ARCHS})
 target_compile_options(nvcomp PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--expt-extended-lambda>)
+
 target_include_directories(nvcomp PUBLIC
-    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>"
-    )
+    "$<BUILD_INTERFACE:${nvcomp_SOURCE_DIR}/include>")
+
 if(UNIX)
 target_include_directories(nvcomp PUBLIC
-  "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
-    )
+  "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 endif()
+
+include_directories("${nvcomp_SOURCE_DIR}/src")
+
 if(DEFINED CUB_DIR)
   target_include_directories(nvcomp PRIVATE "${CUB_DIR}")
 endif()
@@ -58,6 +59,11 @@ endif()
 if (gdeflate_FOUND)
   target_include_directories(nvcomp PRIVATE ${GDEFLATE_INCLUDE_DIRS})
   target_link_libraries(nvcomp PRIVATE gdeflate)
+endif()
+
+if (ans_FOUND)
+  target_include_directories(nvcomp PRIVATE ${ANS_INCLUDE_DIRS})
+  target_link_libraries(nvcomp PRIVATE ans)
 endif()
 
 if (BUILD_TESTS)

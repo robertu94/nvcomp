@@ -44,15 +44,16 @@
     comp_async, \
     decomp_get_temp, \
     decomp_async, \
+    is_input_valid, \
     format_opts) \
 void run_benchmark( \
     const std::vector<std::vector<char>>& data, \
     const bool warmup, \
-    const int count, \
+    const size_t count, \
     const bool csv_output, \
     const bool tab_separator, \
-    const int duplicate_count, \
-    const int num_files) \
+    const size_t duplicate_count, \
+    const size_t num_files) \
 { \
   run_benchmark_template( \
       comp_get_temp, \
@@ -60,6 +61,7 @@ void run_benchmark( \
       comp_async, \
       decomp_get_temp, \
       decomp_async, \
+      is_input_valid, \
       format_opts, \
       data, \
       warmup, \
@@ -68,6 +70,12 @@ void run_benchmark( \
       tab_separator, \
       duplicate_count, \
       num_files); \
+}
+
+// A helper function for if the input data requires no validation.
+static bool inputAlwaysValid(const std::vector<std::vector<char>>& data)
+{
+  return true;
 }
 
 using namespace nvcomp;
@@ -211,17 +219,27 @@ private:
 
 std::vector<char> readFile(const std::string& filename)
 {
-  std::vector<char> buffer(4096);
-  std::vector<char> host_data;
-
   std::ifstream fin(filename, std::ifstream::binary);
+  if (!fin) {
+    std::cerr << "ERROR: Unable to open \"" << filename << "\" for reading."
+              << std::endl;
+    throw std::runtime_error("Error opening file for reading.");
+  }
+
   fin.exceptions(std::ifstream::failbit | std::ifstream::badbit);
 
-  size_t num;
-  do {
-    num = fin.readsome(buffer.data(), buffer.size());
-    host_data.insert(host_data.end(), buffer.begin(), buffer.begin() + num);
-  } while (num > 0);
+  fin.seekg(0, std::ios_base::end);
+  auto fileSize = static_cast<std::streamoff>(fin.tellg());
+  fin.seekg(0, std::ios_base::beg);
+
+  std::vector<char> host_data(fileSize);
+  fin.read(host_data.data(), fileSize);
+
+  if (!fin) {
+    std::cerr << "ERROR: Unable to read all of file \"" << filename << "\"."
+              << std::endl;
+    throw std::runtime_error("Error reading file.");
+  }
 
   return host_data;
 }
@@ -248,7 +266,7 @@ std::vector<std::vector<char>> readFileWithPageSizes(const std::string& filename
 
 std::vector<std::vector<char>>
 multi_file(const std::vector<std::string>& filenames, const size_t chunk_size,
-    const bool has_page_sizes, const int num_duplicates)
+    const bool has_page_sizes, const size_t num_duplicates)
 {
   std::vector<std::vector<char>> split_data;
 
@@ -274,7 +292,7 @@ multi_file(const std::vector<std::string>& filenames, const size_t chunk_size,
   }
 
   const size_t num_chunks = split_data.size();
-  for (int d = 0; d < num_duplicates; ++d) {
+  for (size_t d = 0; d < num_duplicates; ++d) {
     split_data.insert(split_data.end(), split_data.begin(),
         split_data.begin()+num_chunks);
   }
@@ -289,6 +307,7 @@ template<
     typename CompAsyncT,
     typename DecompGetTempT,
     typename DecompAsyncT,
+    typename IsInputValidT,
     typename FormatOptsT>
 void
 run_benchmark_template(
@@ -297,15 +316,18 @@ run_benchmark_template(
     CompAsyncT BatchedCompressAsync,
     DecompGetTempT BatchedDecompressGetTempSize,
     DecompAsyncT BatchedDecompressAsync,
+    IsInputValidT IsInputValid,
     const FormatOptsT format_opts,
     const std::vector<std::vector<char>>& data,
     const bool warmup,
-    const int count,
+    const size_t count,
     const bool csv_output,
     const bool use_tabs,
-    const int duplicates,
-    const int num_files)
+    const size_t duplicates,
+    const size_t num_files)
 {
+  benchmark_assert(IsInputValid(data), "Invalid input data");
+
   const std::string separator = use_tabs ? "\t" : ",";
 
   size_t total_bytes = 0;
@@ -332,7 +354,7 @@ run_benchmark_template(
   size_t compressed_size = 0;
   double comp_time = 0.0;
   double decomp_time = 0.0;
-  for (int iter = 0; iter < count; ++iter) {
+  for (size_t iter = 0; iter < count; ++iter) {
     // compression
     nvcompStatus_t status;
 
@@ -460,7 +482,7 @@ run_benchmark_template(
     for (size_t i = 0; i < batch_size; ++i) {
       benchmark_assert(h_decomp_statuses[i] == nvcompSuccess, "Batch item not successfuly decompressed: i=" + std::to_string(i) + ": status=" +
       std::to_string(h_decomp_statuses[i]));
-      benchmark_assert(h_decomp_sizes[i] == h_input_sizes[i], "Batch item of wrong sizer: i=" + std::to_string(i) + ": act_size=" +
+      benchmark_assert(h_decomp_sizes[i] == h_input_sizes[i], "Batch item of wrong size: i=" + std::to_string(i) + ": act_size=" +
       std::to_string(h_decomp_sizes[i]) + " exp_size=" +
       std::to_string(h_input_sizes[i]));
     }
@@ -558,26 +580,26 @@ run_benchmark_template(
 void run_benchmark(
     const std::vector<std::vector<char>>& data,
     const bool warmup,
-    const int count, 
-    const bool csv_output, 
-    const bool tab_separator, 
-    const int duplicate_count,
-    const int num_files);
+    const size_t count,
+    const bool csv_output,
+    const bool tab_separator,
+    const size_t duplicate_count,
+    const size_t num_files);
 
 struct args_type {
   int gpu;
   std::vector<std::string> filenames;
-  int warmup_count;
-  int iteration_count;
-  int duplicate_count;
+  size_t warmup_count;
+  size_t iteration_count;
+  size_t duplicate_count;
   bool csv_output;
   bool use_tabs;
   bool has_page_sizes;
-  int chunk_size;
+  size_t chunk_size;
 };
 
 struct parameter_type {
-	std::string short_flag;
+  std::string short_flag;
   std::string long_flag;
   std::string description;
   std::string default_value;
@@ -598,7 +620,7 @@ bool parse_bool(const std::string& val)
 void usage(const std::string& name, const std::vector<parameter_type>& parameters)
 {
   std::cout << "Usage: " << name << " [OPTIONS]" << std::endl;
-	for (const parameter_type& parameter : parameters) {
+  for (const parameter_type& parameter : parameters) {
     std::cout << "  -" << parameter.short_flag << ",--" << parameter.long_flag;
     std::cout << "  : " << parameter.description << std::endl;
     if (parameter.default_value.empty()) {
@@ -688,13 +710,13 @@ args_type parse_args(int argc, char ** argv) {
           }
           break;
         } else if (param.long_flag == "warmup_count") {
-          args.warmup_count = std::stol(*(argv++));
+          args.warmup_count = size_t(std::stoull(*(argv++)));
           break;
         } else if (param.long_flag == "iteration_count") {
-          args.iteration_count = std::stol(*(argv++));
+          args.iteration_count = size_t(std::stoull(*(argv++)));
           break;
         } else if (param.long_flag == "duplicate_data") {
-          args.duplicate_count = std::stol(*(argv++));
+          args.duplicate_count = size_t(std::stoull(*(argv++)));
           break;
         } else if (param.long_flag == "csv_output") {
           std::string on(*(argv++));
@@ -709,7 +731,7 @@ args_type parse_args(int argc, char ** argv) {
           args.has_page_sizes = parse_bool(on);
           break;
         } else if (param.long_flag == "chunk_size") {
-          args.chunk_size = std::stol(*(argv++));
+          args.chunk_size = size_t(std::stoull(*(argv++)));
           break;
         } else {
           std::cerr << "INTERNAL ERROR: Unhandled paramter '" << arg << "'." << std::endl;
